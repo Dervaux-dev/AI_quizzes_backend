@@ -1,3 +1,7 @@
+const {
+  formatCertificateDate,
+  generateCertificatePng,
+} = require('../services/certificate.service');
 const { sendCertificateEmail } = require('../services/delivery.service');
 const {
   getPublicQuiz,
@@ -32,32 +36,42 @@ async function submitQuiz(request, response) {
     return response.status(200).json({ ...result, emailSent: false });
   }
 
+  const date = formatCertificateDate();
+  const certificate = await generateCertificatePng({ fullname, date });
   const mailer = request.app.locals.mailer;
-  if (!mailer?.isConfigured()) {
-    return response.status(503).json({
-      ...result,
-      emailSent: false,
-      error: 'Email is not configured. Set the SMTP settings in the backend environment.',
-    });
-  }
+  const emailConfigured = Boolean(mailer?.isConfigured());
+  const submission = {
+    ...result,
+    emailSent: false,
+    emailQueued: emailConfigured,
+    ...(emailConfigured
+      ? {}
+      : {
+          error: 'Email is not configured. Set the SMTP settings in the backend environment.',
+        }),
+  };
 
-  try {
-    await sendCertificateEmail({
+  if (emailConfigured) {
+    sendCertificateEmail({
       mailer,
       to: email,
       fullname,
       role,
-    });
-  } catch (error) {
-    console.error('Certificate email delivery failed:', error);
-    return response.status(502).json({
-      ...result,
-      emailSent: false,
-      error: 'The certificate was generated, but the email could not be sent.',
+      date,
+      png: certificate,
+    }).catch((error) => {
+      console.error('Certificate email delivery failed:', error);
     });
   }
 
-  return response.status(200).json({ ...result, emailSent: true });
+  response.set(
+    'X-Quiz-Result',
+    Buffer.from(JSON.stringify(submission)).toString('base64'),
+  );
+  return response
+    .type('image/png')
+    .set('Content-Disposition', 'inline; filename="certificate.png"')
+    .send(certificate);
 }
 
 module.exports = {

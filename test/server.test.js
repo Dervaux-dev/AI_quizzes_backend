@@ -23,12 +23,20 @@ const correctAnswers = Object.fromEntries(
   quiz.questions.map((question) => [question.id, question.answerIndex]),
 );
 
-function createFakeMailer({ configured = true, fail = false, sent = [] } = {}) {
+function createFakeMailer({
+  configured = true,
+  fail = false,
+  sent = [],
+  delayMs = 0,
+} = {}) {
   return {
     isConfigured() {
       return configured;
     },
     async sendCertificate(payload) {
+      if (delayMs) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
       if (fail) {
         throw new Error('SMTP unavailable');
       }
@@ -58,6 +66,17 @@ function postJson(url, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+async function waitFor(predicate, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error('Timed out waiting for condition.');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 test('allows the deployed frontend origins by default', () => {
@@ -190,17 +209,36 @@ test('generates and emails a certificate after a passing quiz', async () => {
   await withServer(
     createApp({ mailer: createFakeMailer({ sent }) }),
     async (baseUrl) => {
-      const response = await postJson(`${baseUrl}/api/quiz/submit`, {
-        fullname: 'Jane Doe',
-        email: 'jane@example.com',
-        role: 'Student',
-        answers: correctAnswers,
+      const response = await fetch(`${baseUrl}/api/quiz/submit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: 'https://aiskills-iota.vercel.app',
+        },
+        body: JSON.stringify({
+          fullname: 'Jane Doe',
+          email: 'jane@example.com',
+          role: 'Student',
+          answers: correctAnswers,
+        }),
       });
-      const body = await response.json();
+      const body = JSON.parse(
+        Buffer.from(response.headers.get('x-quiz-result'), 'base64').toString(),
+      );
+      const png = Buffer.from(await response.arrayBuffer());
 
       assert.equal(response.status, 200);
+      assert.match(response.headers.get('content-type'), /image\/png/u);
+      assert.match(
+        response.headers.get('access-control-expose-headers'),
+        /X-Quiz-Result/iu,
+      );
       assert.equal(body.passed, true);
-      assert.equal(body.emailSent, true);
+      assert.equal(body.emailSent, false);
+      assert.equal(body.emailQueued, true);
+      assert.ok(png.subarray(0, 8).equals(PNG_SIGNATURE));
+
+      await waitFor(() => sent.length === 1);
       assert.equal(sent.length, 1);
 
       const [payload] = sent;
@@ -225,30 +263,42 @@ test('reports missing email configuration after a passing quiz', async () => {
         role: 'Student',
         answers: correctAnswers,
       });
-      const body = await response.json();
+      const body = JSON.parse(
+        Buffer.from(response.headers.get('x-quiz-result'), 'base64').toString(),
+      );
 
-      assert.equal(response.status, 503);
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get('content-type'), /image\/png/u);
       assert.equal(body.passed, true);
       assert.equal(body.emailSent, false);
+      assert.equal(body.emailQueued, false);
+      assert.match(body.error, /Email is not configured/u);
     },
   );
 });
 
-test('reports email delivery failures after a passing quiz', async () => {
+test('returns the certificate without waiting for slow email delivery', async () => {
+  const sent = [];
   await withServer(
-    createApp({ mailer: createFakeMailer({ fail: true }) }),
+    createApp({ mailer: createFakeMailer({ sent, delayMs: 2000 }) }),
     async (baseUrl) => {
+      const startedAt = Date.now();
       const response = await postJson(`${baseUrl}/api/quiz/submit`, {
         fullname: 'Jane Doe',
         email: 'jane@example.com',
         role: 'Student',
         answers: correctAnswers,
       });
-      const body = await response.json();
+      const body = JSON.parse(
+        Buffer.from(response.headers.get('x-quiz-result'), 'base64').toString(),
+      );
 
-      assert.equal(response.status, 502);
+      assert.ok(Date.now() - startedAt < 1800);
+      assert.equal(response.status, 200);
       assert.equal(body.passed, true);
-      assert.equal(body.emailSent, false);
+      assert.equal(body.emailQueued, true);
+
+      await waitFor(() => sent.length === 1);
     },
   );
 });

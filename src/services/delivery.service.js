@@ -4,9 +4,15 @@ const {
 } = require('./certificate.service');
 const { quiz } = require('./quiz.service');
 
-async function sendCertificateEmail({ mailer, to, fullname, role }) {
-  const date = formatCertificateDate();
-  const certificate = await generateCertificatePng({ fullname, date });
+async function sendCertificateEmail({
+  mailer,
+  to,
+  fullname,
+  role,
+  date = formatCertificateDate(),
+  png,
+}) {
+  const certificate = png ?? await generateCertificatePng({ fullname, date });
   const info = await mailer.sendCertificate({
     to,
     fullname,

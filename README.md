@@ -191,8 +191,12 @@ Accepts:
 ```
 
 `answers` may also be an array in question order. A failed quiz returns `200`
-with `passed: false` and no email. A passing quiz generates the PNG and emails
-it to the participant.
+with JSON containing `passed: false`. A passing quiz returns the certificate
+PNG directly and starts email delivery in the background so SMTP latency does
+not block the result. The base64-encoded JSON score and email status are in the
+`X-Quiz-Result` response header, which is exposed to browser clients through
+CORS. When email is not configured, the PNG is still returned and the result
+header includes an error message.
 
 ### `POST /api/certificates/preview`
 
@@ -223,15 +227,18 @@ const response = await fetch('http://localhost:3001/api/quiz/submit', {
   body: JSON.stringify({ fullname, email, role, answers }),
 });
 
-const result = await response.json();
-if (!response.ok && result.passed !== true) {
-  throw new Error(result.error);
-}
-if (!result.passed) {
+if (response.headers.get('content-type')?.includes('image/png')) {
+  const result = JSON.parse(
+    atob(response.headers.get('X-Quiz-Result')),
+  );
+  const certificateUrl = URL.createObjectURL(await response.blob());
+  // Display or download certificateUrl; revoke it when no longer needed.
+} else {
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.error);
+  }
   console.log(`Score: ${result.percent}% (pass mark ${result.passMarkPercent}%)`);
-}
-if (result.passed && result.emailSent === false) {
-  console.warn(result.error);
 }
 ```
 

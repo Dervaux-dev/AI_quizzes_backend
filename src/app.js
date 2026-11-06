@@ -32,7 +32,10 @@ function createApp({ mailer = defaultMailer } = {}) {
   const app = express();
 
   app.locals.mailer = mailer;
-  app.use(cors({ origin: getCorsOrigins() }));
+  app.use(cors({
+    origin: getCorsOrigins(),
+    exposedHeaders: ['X-Quiz-Result'],
+  }));
   app.use(express.json({ limit: '10kb' }));
   app.use('/api', routes);
   mountFrontend(app);

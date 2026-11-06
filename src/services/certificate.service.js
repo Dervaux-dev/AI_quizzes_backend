@@ -13,6 +13,9 @@ const BACKGROUND_PATH = path.join(
 );
 const CERTIFICATE_WIDTH = 1800;
 const CERTIFICATE_HEIGHT = 1272;
+const CERTIFICATE_CACHE_TTL_MS = 5 * 60 * 1000;
+const CERTIFICATE_CACHE_MAX_ENTRIES = 50;
+const certificateCache = new Map();
 
 const NAME_LAYOUT = {
   x: 900,
@@ -97,6 +100,23 @@ function loadBackground() {
   return backgroundPromise;
 }
 
+function getCertificateCacheKey(fullname, date) {
+  return `${fullname}\u0000${date}`;
+}
+
+function pruneCertificateCache(now) {
+  for (const [key, entry] of certificateCache) {
+    if (entry.expiresAt <= now) {
+      certificateCache.delete(key);
+    }
+  }
+
+  while (certificateCache.size >= CERTIFICATE_CACHE_MAX_ENTRIES) {
+    const oldestKey = certificateCache.keys().next().value;
+    certificateCache.delete(oldestKey);
+  }
+}
+
 async function generateCertificatePng(input) {
   const fullname = validateFullname(input?.fullname ?? input?.name);
   const date = input?.date ?? formatCertificateDate();
@@ -105,13 +125,37 @@ async function generateCertificatePng(input) {
     throw new InputError('Date must be a string.');
   }
 
-  const background = await loadBackground();
-  const overlay = Buffer.from(buildOverlaySvg({ fullname, date }));
+  const now = Date.now();
+  const cacheKey = getCertificateCacheKey(fullname, date);
+  const cached = certificateCache.get(cacheKey);
 
-  return sharp(background)
-    .composite([{ input: overlay, top: 0, left: 0 }])
-    .png({ compressionLevel: 9 })
-    .toBuffer();
+  if (cached && cached.expiresAt > now) {
+    return cached.promise;
+  }
+
+  pruneCertificateCache(now);
+
+  const promise = (async () => {
+    const background = await loadBackground();
+    const overlay = Buffer.from(buildOverlaySvg({ fullname, date }));
+
+    return sharp(background)
+      .composite([{ input: overlay, top: 0, left: 0 }])
+      .png({ compressionLevel: 6 })
+      .toBuffer();
+  })();
+
+  certificateCache.set(cacheKey, {
+    expiresAt: now + CERTIFICATE_CACHE_TTL_MS,
+    promise,
+  });
+
+  try {
+    return await promise;
+  } catch (error) {
+    certificateCache.delete(cacheKey);
+    throw error;
+  }
 }
 
 async function assertCertificateBackgroundExists() {
