@@ -98,6 +98,16 @@ test('rejects invalid certificate input', async () => {
       role: 'Student',
     });
     assert.equal(missingAnswers.status, 400);
+
+    const invalidCertificateEmail = await postJson(
+      `${baseUrl}/api/certificates/email`,
+      {
+        fullname: 'Jane Doe',
+        email: 'not-an-email',
+        role: 'Student',
+      },
+    );
+    assert.equal(invalidCertificateEmail.status, 400);
   });
 });
 
@@ -202,6 +212,65 @@ test('returns a PNG certificate preview', async () => {
     const png = Buffer.from(await response.arrayBuffer());
     assert.ok(png.subarray(0, 8).equals(PNG_SIGNATURE));
   });
+});
+
+test('emails a certificate on demand from the certificate screen', async () => {
+  const sent = [];
+  await withServer(
+    createApp({ mailer: createFakeMailer({ sent }) }),
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/api/certificates/email`, {
+        fullname: 'Jane Doe',
+        email: 'jane@example.com',
+        role: 'Student',
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(body.status, 'sent');
+      assert.equal(body.messageId, 'test-message');
+      assert.equal(sent.length, 1);
+
+      const [payload] = sent;
+      assert.equal(payload.to, 'jane@example.com');
+      assert.equal(payload.fullname, 'Jane Doe');
+      assert.equal(payload.role, 'Student');
+      assert.ok(Buffer.isBuffer(payload.png));
+      assert.ok(payload.png.subarray(0, 8).equals(PNG_SIGNATURE));
+    },
+  );
+});
+
+test('reports certificate email configuration and delivery failures', async () => {
+  await withServer(
+    createApp({ mailer: createFakeMailer({ configured: false }) }),
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/api/certificates/email`, {
+        fullname: 'Jane Doe',
+        email: 'jane@example.com',
+        role: 'Student',
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 503);
+      assert.equal(body.status, 'not_sent');
+    },
+  );
+
+  await withServer(
+    createApp({ mailer: createFakeMailer({ fail: true }) }),
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/api/certificates/email`, {
+        fullname: 'Jane Doe',
+        email: 'jane@example.com',
+        role: 'Student',
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 502);
+      assert.equal(body.status, 'not_sent');
+    },
+  );
 });
 
 test(

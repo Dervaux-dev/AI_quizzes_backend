@@ -57,15 +57,19 @@ backend/
 │   │   └── quiz.routes.js
 │   ├── services/
 │   │   ├── certificate.service.js
+│   │   ├── delivery.service.js
 │   │   ├── mail.service.js
 │   │   └── quiz.service.js
 │   └── utils/
 │       ├── errors.js
 │       └── validation.js
+├── scripts/
+│   └── send-test-certificate.js
 ├── templates/
 │   └── AI_Certificate_Template_MSGR_MUBILIGI_CATHOLIC_TSS.pdf
 └── test/
     ├── certificate.test.js
+    ├── mail.test.js
     ├── quiz.test.js
     └── server.test.js
 ```
@@ -83,6 +87,39 @@ Fill in the SMTP values in `.env` before using the email flow. Do not commit
 
 The API listens on port `3001` by default. `CORS_ORIGIN` may contain a
 comma-separated list of allowed frontend origins.
+
+## Email delivery
+
+After a passing quiz, the backend sends the certificate PNG with Nodemailer to
+the email address entered during registration. The manual download/preview
+still works independently.
+
+The certificate screen also has a **Send to email** button (shown as
+**Resend to email** after the automatic send). It calls
+`POST /api/certificates/email`, so the participant can request the email again
+without retaking the quiz. Downloading and emailing use the same generated
+certificate layout.
+
+Copy `.env.example` to `.env` and fill in the SMTP values. Common settings:
+
+- Gmail: `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_SECURE=false`,
+  `SMTP_USER=your Gmail address`, `SMTP_PASS=an App Password`.
+- Microsoft 365/Outlook: `SMTP_HOST=smtp.office365.com`, `SMTP_PORT=587`,
+  `SMTP_SECURE=false`, with the mailbox credentials.
+- Zoho: `SMTP_HOST=smtp.zoho.com`, `SMTP_PORT=465`, `SMTP_SECURE=true`.
+- School mail server: use the host, port, and credentials from IT.
+
+`MAIL_FROM` must be an address the SMTP server allows you to send from.
+
+Test delivery without taking the quiz:
+
+```bash
+npm run email:test -- you@example.com "Jane Doe" "Student"
+```
+
+If SMTP is not configured, a passing quiz still returns the result and the
+frontend keeps the certificate preview/download available with
+`emailSent: false`.
 
 ## Connect the frontend
 
@@ -163,6 +200,20 @@ Accepts `{ "fullname": "Jane Doe" }` and returns the generated PNG for preview
 without sending an email. The role is used in the email only and is not printed
 on the certificate.
 
+### `POST /api/certificates/email`
+
+Accepts `{ "fullname": "Jane Doe", "email": "jane@example.com", "role": "Student" }`
+and generates the certificate with the same layout as the preview, then emails
+it to the given address:
+
+```json
+{ "status": "sent", "messageId": "<...>" }
+```
+
+Returns `503` when SMTP is not configured and `502` when delivery fails. This
+endpoint is used by the certificate screen's **Send to email** button and can
+also be called directly to resend a certificate.
+
 ## Frontend example
 
 ```js
@@ -173,11 +224,14 @@ const response = await fetch('http://localhost:3001/api/quiz/submit', {
 });
 
 const result = await response.json();
-if (!response.ok) {
+if (!response.ok && result.passed !== true) {
   throw new Error(result.error);
 }
 if (!result.passed) {
   console.log(`Score: ${result.percent}% (pass mark ${result.passMarkPercent}%)`);
+}
+if (result.passed && result.emailSent === false) {
+  console.warn(result.error);
 }
 ```
 
@@ -195,3 +249,21 @@ const pngUrl = URL.createObjectURL(await preview.blob());
 
 Revoke preview URLs with `URL.revokeObjectURL(pngUrl)` when they are no longer
 needed.
+
+To send or resend the certificate email:
+
+```js
+const emailResponse = await fetch(
+  'http://localhost:3001/api/certificates/email',
+  {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fullname, email, role }),
+  },
+);
+
+const emailResult = await emailResponse.json();
+if (!emailResponse.ok) {
+  throw new Error(emailResult.error);
+}
+```

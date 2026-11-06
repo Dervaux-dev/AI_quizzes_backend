@@ -1,11 +1,7 @@
-const {
-  formatCertificateDate,
-  generateCertificatePng,
-} = require('../services/certificate.service');
+const { sendCertificateEmail } = require('../services/delivery.service');
 const {
   getPublicQuiz,
   normalizeAnswers,
-  quiz,
   scoreQuiz,
 } = require('../services/quiz.service');
 const { InputError } = require('../utils/errors');
@@ -45,17 +41,12 @@ async function submitQuiz(request, response) {
     });
   }
 
-  const date = formatCertificateDate();
-  const certificate = await generateCertificatePng({ fullname, role, date });
-
   try {
-    await mailer.sendCertificate({
+    await sendCertificateEmail({
+      mailer,
       to: email,
       fullname,
       role,
-      date,
-      courseTitle: quiz.title,
-      png: certificate,
     });
   } catch (error) {
     console.error('Certificate email delivery failed:', error);
