@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const nodemailer = require('nodemailer');
 const { createMailer } = require('../src/services/mail.service');
 const { quiz } = require('../src/services/quiz.service');
 
@@ -88,6 +89,52 @@ test('detects missing SMTP configuration', () => {
     const mailer = createMailer();
     assert.equal(mailer.isConfigured(), false);
   } finally {
+    restoreMailEnv(previous);
+  }
+});
+
+test('reuses a pooled SMTP transport for subsequent emails', async () => {
+  const previous = saveMailEnv();
+  const originalCreateTransport = nodemailer.createTransport;
+  configureMailEnv();
+
+  let createCount = 0;
+  let sendCount = 0;
+  let transportOptions;
+  nodemailer.createTransport = (options) => {
+    createCount += 1;
+    transportOptions = options;
+    return {
+      async sendMail() {
+        sendCount += 1;
+        return { messageId: `message-${sendCount}` };
+      },
+    };
+  };
+
+  try {
+    const mailer = createMailer();
+    const message = {
+      to: 'jane@example.com',
+      fullname: 'Jane Doe',
+      role: 'Student',
+      date: '06 November 2026',
+      courseTitle: quiz.title,
+      png: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    };
+
+    await mailer.sendCertificate(message);
+    await mailer.sendCertificate(message);
+
+    assert.equal(createCount, 1);
+    assert.equal(sendCount, 2);
+    assert.equal(transportOptions.pool, true);
+    assert.equal(transportOptions.maxConnections, 2);
+    assert.equal(transportOptions.connectionTimeout, 10_000);
+    assert.equal(transportOptions.greetingTimeout, 10_000);
+    assert.equal(transportOptions.socketTimeout, 30_000);
+  } finally {
+    nodemailer.createTransport = originalCreateTransport;
     restoreMailEnv(previous);
   }
 });

@@ -18,6 +18,9 @@ async function startServer() {
     });
 
     server.on('error', reject);
+    server.on('close', () => {
+      app.locals.mailer?.close?.();
+    });
   });
 }
 

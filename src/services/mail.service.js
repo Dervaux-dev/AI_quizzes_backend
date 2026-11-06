@@ -31,9 +31,34 @@ function escapeHtml(value) {
 }
 
 function createMailer({ transporter } = {}) {
+  let sharedTransport = transporter || null;
+
+  function getTransport(config) {
+    if (!sharedTransport) {
+      sharedTransport = nodemailer.createTransport({
+        host: config.host,
+        port: config.port,
+        secure: config.secure,
+        auth: { user: config.user, pass: config.pass },
+        pool: true,
+        maxConnections: 2,
+        maxMessages: 100,
+        connectionTimeout: 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 30_000,
+      });
+    }
+
+    return sharedTransport;
+  }
+
   return {
     isConfigured() {
       return isConfigured();
+    },
+
+    close() {
+      sharedTransport?.close?.();
     },
 
     async sendCertificate({
@@ -49,19 +74,14 @@ function createMailer({ transporter } = {}) {
         throw new Error('Email is not configured.');
       }
 
-      const transport = transporter
-        || nodemailer.createTransport({
-          host: config.host,
-          port: config.port,
-          secure: config.secure,
-          auth: { user: config.user, pass: config.pass },
-        });
+      const transport = getTransport(config);
 
       const safeName = escapeHtml(fullname);
       const safeRole = escapeHtml(role);
       const safeCourse = escapeHtml(courseTitle);
 
-      return transport.sendMail({
+      const startedAt = Date.now();
+      const info = await transport.sendMail({
         from: config.from,
         to,
         subject: 'Your Certificate of Participation',
@@ -90,6 +110,11 @@ function createMailer({ transporter } = {}) {
           contentType: 'image/png',
         }],
       });
+
+      console.info(
+        `Certificate email accepted by SMTP in ${Date.now() - startedAt} ms.`,
+      );
+      return info;
     },
   };
 }

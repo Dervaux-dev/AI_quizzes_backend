@@ -88,6 +88,12 @@ Fill in the SMTP values in `.env` before using the email flow. Do not commit
 The API listens on port `3001` by default. `CORS_ORIGIN` may contain a
 comma-separated list of allowed frontend origins.
 
+The backend reuses a pooled SMTP connection for subsequent messages and
+applies connection, greeting, and socket timeouts. Its log reports how long
+SMTP takes to accept a message without logging recipient details. The first
+message still needs to establish the connection; the mail provider controls
+how quickly it is accepted and delivered.
+
 ## Email delivery
 
 After a passing quiz, the backend sends the certificate PNG with Nodemailer to
