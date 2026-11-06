@@ -9,11 +9,23 @@ function getPort() {
   return port;
 }
 
+const DEFAULT_CORS_ORIGINS = [
+  'http://localhost:5173',
+  'https://aiskills-iota.vercel.app',
+  'https://aiskills-git-master-digital-arts.vercel.app',
+];
+
 function getCorsOrigins() {
-  return (process.env.CORS_ORIGIN || 'http://localhost:5173')
+  const configured = (process.env.CORS_ORIGIN || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
+
+  if (configured.includes('*')) {
+    return '*';
+  }
+
+  return [...new Set([...DEFAULT_CORS_ORIGINS, ...configured])];
 }
 
 function getMailConfig() {

@@ -4,6 +4,7 @@ const { once } = require('node:events');
 const path = require('node:path');
 const test = require('node:test');
 const { createApp } = require('../src/app');
+const { getCorsOrigins } = require('../src/config/env');
 const { quiz } = require('../src/services/quiz.service');
 
 const frontendIndex = path.join(
@@ -58,6 +59,58 @@ function postJson(url, body) {
     body: JSON.stringify(body),
   });
 }
+
+test('allows the deployed frontend origins by default', () => {
+  const previous = process.env.CORS_ORIGIN;
+  delete process.env.CORS_ORIGIN;
+
+  try {
+    const origins = getCorsOrigins();
+    assert.ok(origins.includes('https://aiskills-iota.vercel.app'));
+    assert.ok(
+      origins.includes('https://aiskills-git-master-digital-arts.vercel.app'),
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.CORS_ORIGIN;
+    } else {
+      process.env.CORS_ORIGIN = previous;
+    }
+  }
+});
+
+test('merges CORS_ORIGIN into the default origins', () => {
+  const previous = process.env.CORS_ORIGIN;
+  process.env.CORS_ORIGIN = 'https://example.com, https://second.example.com';
+
+  try {
+    const origins = getCorsOrigins();
+    assert.ok(origins.includes('https://example.com'));
+    assert.ok(origins.includes('https://second.example.com'));
+    assert.ok(origins.includes('https://aiskills-iota.vercel.app'));
+  } finally {
+    if (previous === undefined) {
+      delete process.env.CORS_ORIGIN;
+    } else {
+      process.env.CORS_ORIGIN = previous;
+    }
+  }
+});
+
+test('supports a wildcard CORS origin', () => {
+  const previous = process.env.CORS_ORIGIN;
+  process.env.CORS_ORIGIN = '*';
+
+  try {
+    assert.equal(getCorsOrigins(), '*');
+  } finally {
+    if (previous === undefined) {
+      delete process.env.CORS_ORIGIN;
+    } else {
+      process.env.CORS_ORIGIN = previous;
+    }
+  }
+});
 
 test('health and quiz endpoints respond correctly', async () => {
   await withServer(createApp({ mailer: createFakeMailer() }), async (baseUrl) => {
