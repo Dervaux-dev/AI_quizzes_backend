@@ -1,0 +1,233 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const { once } = require('node:events');
+const path = require('node:path');
+const test = require('node:test');
+const { createApp } = require('../src/app');
+const { quiz } = require('../src/services/quiz.service');
+
+const frontendIndex = path.join(
+  __dirname,
+  '..',
+  '..',
+  'frontend',
+  'dist',
+  'index.html',
+);
+
+const PNG_SIGNATURE = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
+const correctAnswers = Object.fromEntries(
+  quiz.questions.map((question) => [question.id, question.answerIndex]),
+);
+
+function createFakeMailer({ configured = true, fail = false, sent = [] } = {}) {
+  return {
+    isConfigured() {
+      return configured;
+    },
+    async sendCertificate(payload) {
+      if (fail) {
+        throw new Error('SMTP unavailable');
+      }
+      sent.push(payload);
+      return { messageId: 'test-message' };
+    },
+  };
+}
+
+async function withServer(app, callback) {
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const { port } = server.address();
+    await callback(`http://127.0.0.1:${port}`);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
+function postJson(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+test('health and quiz endpoints respond correctly', async () => {
+  await withServer(createApp({ mailer: createFakeMailer() }), async (baseUrl) => {
+    const health = await fetch(`${baseUrl}/api/health`);
+    assert.equal(health.status, 200);
+    assert.deepEqual(await health.json(), { status: 'ok' });
+
+    const quizResponse = await fetch(`${baseUrl}/api/quiz`);
+    assert.equal(quizResponse.status, 200);
+
+    const publicQuiz = await quizResponse.json();
+    assert.equal(publicQuiz.questions.length, quiz.questions.length);
+    assert.equal(publicQuiz.questions[0].answerIndex, undefined);
+  });
+});
+
+test('rejects invalid certificate input', async () => {
+  await withServer(createApp({ mailer: createFakeMailer() }), async (baseUrl) => {
+    const missingName = await postJson(`${baseUrl}/api/quiz/submit`, {
+      fullname: '',
+      email: 'jane@example.com',
+      role: 'Student',
+      answers: correctAnswers,
+    });
+    assert.equal(missingName.status, 400);
+
+    const invalidEmail = await postJson(`${baseUrl}/api/quiz/submit`, {
+      fullname: 'Jane Doe',
+      email: 'not-an-email',
+      role: 'Student',
+      answers: correctAnswers,
+    });
+    assert.equal(invalidEmail.status, 400);
+
+    const missingAnswers = await postJson(`${baseUrl}/api/quiz/submit`, {
+      fullname: 'Jane Doe',
+      email: 'jane@example.com',
+      role: 'Student',
+    });
+    assert.equal(missingAnswers.status, 400);
+  });
+});
+
+test('does not email a certificate when the quiz is failed', async () => {
+  const sent = [];
+  await withServer(
+    createApp({ mailer: createFakeMailer({ sent }) }),
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/api/quiz/submit`, {
+        fullname: 'Jane Doe',
+        email: 'jane@example.com',
+        role: 'Student',
+        answers: {},
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(body.passed, false);
+      assert.equal(body.emailSent, false);
+      assert.equal(sent.length, 0);
+    },
+  );
+});
+
+test('generates and emails a certificate after a passing quiz', async () => {
+  const sent = [];
+  await withServer(
+    createApp({ mailer: createFakeMailer({ sent }) }),
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/api/quiz/submit`, {
+        fullname: 'Jane Doe',
+        email: 'jane@example.com',
+        role: 'Student',
+        answers: correctAnswers,
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(body.passed, true);
+      assert.equal(body.emailSent, true);
+      assert.equal(sent.length, 1);
+
+      const [payload] = sent;
+      assert.equal(payload.to, 'jane@example.com');
+      assert.equal(payload.fullname, 'Jane Doe');
+      assert.equal(payload.role, 'Student');
+      assert.equal(payload.courseTitle, quiz.title);
+      assert.match(payload.date, /^\d{2} [A-Z][a-z]+ \d{4}$/u);
+      assert.ok(Buffer.isBuffer(payload.png));
+      assert.ok(payload.png.subarray(0, 8).equals(PNG_SIGNATURE));
+    },
+  );
+});
+
+test('reports missing email configuration after a passing quiz', async () => {
+  await withServer(
+    createApp({ mailer: createFakeMailer({ configured: false }) }),
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/api/quiz/submit`, {
+        fullname: 'Jane Doe',
+        email: 'jane@example.com',
+        role: 'Student',
+        answers: correctAnswers,
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 503);
+      assert.equal(body.passed, true);
+      assert.equal(body.emailSent, false);
+    },
+  );
+});
+
+test('reports email delivery failures after a passing quiz', async () => {
+  await withServer(
+    createApp({ mailer: createFakeMailer({ fail: true }) }),
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/api/quiz/submit`, {
+        fullname: 'Jane Doe',
+        email: 'jane@example.com',
+        role: 'Student',
+        answers: correctAnswers,
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 502);
+      assert.equal(body.passed, true);
+      assert.equal(body.emailSent, false);
+    },
+  );
+});
+
+test('returns a PNG certificate preview', async () => {
+  await withServer(createApp({ mailer: createFakeMailer() }), async (baseUrl) => {
+    const response = await postJson(`${baseUrl}/api/certificates/preview`, {
+      fullname: 'Jane Doe',
+    });
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /image\/png/u);
+
+    const png = Buffer.from(await response.arrayBuffer());
+    assert.ok(png.subarray(0, 8).equals(PNG_SIGNATURE));
+  });
+});
+
+test(
+  'serves the built frontend when it is available',
+  { skip: !fs.existsSync(frontendIndex) },
+  async () => {
+    await withServer(
+      createApp({ mailer: createFakeMailer() }),
+      async (baseUrl) => {
+        const home = await fetch(`${baseUrl}/`);
+        assert.equal(home.status, 200);
+        assert.match(home.headers.get('content-type'), /text\/html/u);
+        assert.match(await home.text(), /<div id="root"><\/div>/u);
+
+        const clientRoute = await fetch(`${baseUrl}/quiz`);
+        assert.equal(clientRoute.status, 200);
+        assert.match(clientRoute.headers.get('content-type'), /text\/html/u);
+      },
+    );
+  },
+);
+
+test('returns a JSON 404 for unknown routes', async () => {
+  await withServer(createApp({ mailer: createFakeMailer() }), async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/unknown`);
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { error: 'Not found.' });
+  });
+});
