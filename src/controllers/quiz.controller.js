@@ -64,14 +64,7 @@ async function submitQuiz(request, response) {
     });
   }
 
-  response.set(
-    'X-Quiz-Result',
-    Buffer.from(JSON.stringify(submission)).toString('base64'),
-  );
-  return response
-    .type('image/png')
-    .set('Content-Disposition', 'inline; filename="certificate.png"')
-    .send(certificate);
+  return response.json(submission);
 }
 
 module.exports = {

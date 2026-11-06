@@ -222,21 +222,13 @@ test('generates and emails a certificate after a passing quiz', async () => {
           answers: correctAnswers,
         }),
       });
-      const body = JSON.parse(
-        Buffer.from(response.headers.get('x-quiz-result'), 'base64').toString(),
-      );
-      const png = Buffer.from(await response.arrayBuffer());
+      const body = await response.json();
 
       assert.equal(response.status, 200);
-      assert.match(response.headers.get('content-type'), /image\/png/u);
-      assert.match(
-        response.headers.get('access-control-expose-headers'),
-        /X-Quiz-Result/iu,
-      );
+      assert.match(response.headers.get('content-type'), /application\/json/u);
       assert.equal(body.passed, true);
       assert.equal(body.emailSent, false);
       assert.equal(body.emailQueued, true);
-      assert.ok(png.subarray(0, 8).equals(PNG_SIGNATURE));
 
       await waitFor(() => sent.length === 1);
       assert.equal(sent.length, 1);
@@ -263,12 +255,10 @@ test('reports missing email configuration after a passing quiz', async () => {
         role: 'Student',
         answers: correctAnswers,
       });
-      const body = JSON.parse(
-        Buffer.from(response.headers.get('x-quiz-result'), 'base64').toString(),
-      );
+      const body = await response.json();
 
       assert.equal(response.status, 200);
-      assert.match(response.headers.get('content-type'), /image\/png/u);
+      assert.match(response.headers.get('content-type'), /application\/json/u);
       assert.equal(body.passed, true);
       assert.equal(body.emailSent, false);
       assert.equal(body.emailQueued, false);
@@ -289,12 +279,11 @@ test('returns the certificate without waiting for slow email delivery', async ()
         role: 'Student',
         answers: correctAnswers,
       });
-      const body = JSON.parse(
-        Buffer.from(response.headers.get('x-quiz-result'), 'base64').toString(),
-      );
+      const body = await response.json();
 
       assert.ok(Date.now() - startedAt < 1800);
       assert.equal(response.status, 200);
+      assert.match(response.headers.get('content-type'), /application\/json/u);
       assert.equal(body.passed, true);
       assert.equal(body.emailQueued, true);
 
