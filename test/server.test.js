@@ -26,6 +26,7 @@ const correctAnswers = Object.fromEntries(
 function createFakeMailer({
   configured = true,
   fail = false,
+  failureCode,
   sent = [],
   delayMs = 0,
 } = {}) {
@@ -38,7 +39,11 @@ function createFakeMailer({
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
       if (fail) {
-        throw new Error('SMTP unavailable');
+        const error = new Error('SMTP unavailable');
+        if (failureCode) {
+          error.code = failureCode;
+        }
+        throw error;
       }
       sent.push(payload);
       return { messageId: 'test-message' };
@@ -350,7 +355,9 @@ test('reports certificate email configuration and delivery failures', async () =
   );
 
   await withServer(
-    createApp({ mailer: createFakeMailer({ fail: true }) }),
+    createApp({
+      mailer: createFakeMailer({ fail: true, failureCode: 'EAUTH' }),
+    }),
     async (baseUrl) => {
       const response = await postJson(`${baseUrl}/api/certificates/email`, {
         fullname: 'Jane Doe',
@@ -361,6 +368,8 @@ test('reports certificate email configuration and delivery failures', async () =
 
       assert.equal(response.status, 502);
       assert.equal(body.status, 'not_sent');
+      assert.equal(body.code, 'EAUTH');
+      assert.match(body.error, /SMTP rejected authentication/u);
     },
   );
 });

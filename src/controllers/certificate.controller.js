@@ -6,6 +6,23 @@ const {
   validateRole,
 } = require('../utils/validation');
 
+function getEmailFailureMessage(code) {
+  switch (code) {
+    case 'EAUTH':
+      return 'SMTP rejected authentication. Check the credentials configured on the backend.';
+    case 'EENVELOPE':
+      return 'SMTP rejected the sender or recipient address. Check MAIL_FROM and the recipient address.';
+    case 'ETIMEDOUT':
+    case 'ECONNECTION':
+    case 'ESOCKET':
+      return 'The backend could not complete its SMTP connection. Check the SMTP host, port, TLS settings, and network access.';
+    case 'EMESSAGE':
+      return 'The SMTP provider rejected the email content or attachment.';
+    default:
+      return 'The SMTP provider did not accept the email. Check the backend logs for the SMTP error.';
+  }
+}
+
 async function previewCertificate(request, response) {
   const fullname = validateFullname(
     request.body?.fullname ?? request.body?.name,
@@ -46,10 +63,18 @@ async function emailCertificate(request, response) {
       messageId: info?.messageId,
     });
   } catch (error) {
-    console.error('Certificate email delivery failed:', error);
+    const code = typeof error?.code === 'string'
+      ? error.code
+      : 'EMAIL_SEND_FAILED';
+    console.error('Certificate email delivery failed:', {
+      code,
+      command: error?.command,
+      responseCode: error?.responseCode,
+    });
     return response.status(502).json({
       status: 'not_sent',
-      error: 'The certificate was generated, but the email could not be sent.',
+      code,
+      error: getEmailFailureMessage(code),
     });
   }
 }
